@@ -1,3 +1,4 @@
+// src/appointments/appointments.service.ts
 import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -8,11 +9,8 @@ import { PatientsService } from '../patients/patients.service';
 import { DoctorsService } from '../doctors/doctors.service';
 import { QueuesService } from '../queues/queues.service';
 import { QueueStatus } from '../queues/entities/queue.entity';
-import dayjs from 'dayjs'; // ✅ default import, not *
+import dayjs from 'dayjs';
 import isSameOrBefore from 'dayjs/plugin/isSameOrBefore';
-
-dayjs.extend(isSameOrBefore);
-
 
 dayjs.extend(isSameOrBefore);
 
@@ -51,15 +49,24 @@ export class AppointmentsService {
       );
     }
 
-    // 4. Calculate appointment end time based on slot duration
-    const apptEndTime = appointmentTime.add(doctor.slot_duration, 'minute');
+    // 4. Check break times
+    if (doctor.breaks && doctor.breaks.length > 0) {
+      for (const br of doctor.breaks) {
+        const breakStart = dayjs(`${dto.appointment_date} ${br.start}`);
+        const breakEnd = dayjs(`${dto.appointment_date} ${br.end}`);
+        if (appointmentTime.isBefore(breakEnd) && appointmentTime.add(doctor.slot_duration, 'minute').isAfter(breakStart)) {
+          throw new BadRequestException('Selected time falls within doctor break time');
+        }
+      }
+    }
 
-    // Prevent booking that ends after working hours
+    // 5. Calculate appointment end time
+    const apptEndTime = appointmentTime.add(doctor.slot_duration, 'minute');
     if (apptEndTime.isAfter(workEnd)) {
       throw new BadRequestException('Selected slot exceeds doctor working hours');
     }
 
-    // 5. Check for overlapping appointments
+    // 6. Check for overlapping appointments
     const doctorAppointments = await this.repo.find({
       where: {
         doctor: { id: doctor.id },
@@ -78,7 +85,7 @@ export class AppointmentsService {
       throw new BadRequestException('Selected time slot overlaps with another appointment');
     }
 
-    // 6. Create appointment
+    // 7. Create appointment
     const appt = this.repo.create({
       patient,
       doctor,
@@ -87,71 +94,71 @@ export class AppointmentsService {
     });
     const saved = await this.repo.save(appt);
 
-    // 7. Remove from queue
+    // 8. Remove from queue
     await this.queuesService.remove(queueEntry.id);
 
     return saved;
   }
 
   async getAvailableSlots(doctorId: number, date: string) {
-  const doctor = await this.doctorsService.findOne(doctorId);
+    const doctor = await this.doctorsService.findOne(doctorId);
 
-  const workStart = dayjs(`${date} ${doctor.work_start_time}`);
-  const workEnd = dayjs(`${date} ${doctor.work_end_time}`);
-  const slotDuration = doctor.slot_duration;
+    const workStart = dayjs(`${date} ${doctor.work_start_time}`);
+    const workEnd = dayjs(`${date} ${doctor.work_end_time}`);
+    const slotDuration = doctor.slot_duration;
 
-  // Handle doctor breaks
-  const breaks = (doctor.breaks || []).map(b => ({
-    start: dayjs(`${date} ${b.start}`),
-    end: dayjs(`${date} ${b.end}`),
-  }));
+    // Fetch booked appointments for the day
+    const bookedAppointments = await this.repo.find({
+      where: {
+        doctor: { id: doctor.id },
+        appointment_date: date,
+        status: AppointmentStatus.BOOKED,
+      },
+    });
 
-  // Fetch booked appointments
-  const bookedAppointments = await this.repo.find({
-    where: {
-      doctor: { id: doctor.id },
-      appointment_date: date,
-      status: AppointmentStatus.BOOKED,
-    },
-  });
+    // Convert booked appointments into time ranges
+    const bookedRanges = bookedAppointments.map(appt => {
+      const start = dayjs(`${appt.appointment_date} ${appt.appointment_time}`);
+      const end = start.add(slotDuration, 'minute');
+      return { start, end };
+    });
 
-  // Convert booked appointments into ranges
-  const bookedRanges = bookedAppointments.map(appt => {
-    const start = dayjs(`${appt.appointment_date} ${appt.appointment_time}`);
-    const end = start.add(slotDuration, 'minute');
-    return { start, end };
-  });
+    // Convert doctor breaks into time ranges
+    const breakRanges = (doctor.breaks || []).map(br => {
+      const start = dayjs(`${date} ${br.start}`);
+      const end = dayjs(`${date} ${br.end}`);
+      return { start, end };
+    });
 
-  const slots: string[] = [];
-  let currentTime = workStart.clone();
+    const slots: string[] = [];
+    let currentTime = workStart.clone();
 
-  while (currentTime.clone().add(slotDuration, 'minute').isSameOrBefore(workEnd)) {
-    const slotEnd = currentTime.clone().add(slotDuration, 'minute');
+    while (currentTime.clone().add(slotDuration, 'minute').isSameOrBefore(workEnd)) {
+      const slotEnd = currentTime.clone().add(slotDuration, 'minute');
 
-    // Check overlap with booked appointments
-    const isBookedOverlap = bookedRanges.some(range =>
-      currentTime.isBefore(range.end) && slotEnd.isAfter(range.start),
-    );
+      // Check overlap with booked slots
+      const bookedOverlap = bookedRanges.some(range =>
+        currentTime.isBefore(range.end) && slotEnd.isAfter(range.start),
+      );
 
-    // Check overlap with breaks
-    const isBreakOverlap = breaks.some(b =>
-      currentTime.isBefore(b.end) && slotEnd.isAfter(b.start),
-    );
+      // Check overlap with breaks
+      const breakOverlap = breakRanges.some(range =>
+        currentTime.isBefore(range.end) && slotEnd.isAfter(range.start),
+      );
 
-    if (!isBookedOverlap && !isBreakOverlap) {
-      slots.push(currentTime.format('HH:mm'));
+      if (!bookedOverlap && !breakOverlap) {
+        slots.push(currentTime.format('HH:mm'));
+      }
+
+      currentTime = currentTime.add(slotDuration, 'minute');
     }
 
-    currentTime = currentTime.add(slotDuration, 'minute');
+    return {
+      doctorId,
+      date,
+      availableSlots: slots,
+    };
   }
-
-  return {
-    doctorId,
-    date,
-    availableSlots: slots,
-  };
-}
-
 
   findAll() {
     return this.repo.find({ order: { created_at: 'DESC' } });
@@ -166,7 +173,6 @@ export class AppointmentsService {
   async update(id: number, dto: UpdateAppointmentDto) {
     const appt = await this.findOne(id);
     Object.assign(appt, dto);
-    
     return this.repo.save(appt);
   }
 

@@ -1,19 +1,42 @@
-import { IsString, IsArray, IsOptional } from 'class-validator';
+// src/doctors/dto/create-doctor.dto.ts
+import { IsString, IsNotEmpty, IsOptional, IsInt, Min, IsArray, ValidateNested } from 'class-validator';
+import { Type } from 'class-transformer';
+
+class BreakDto {
+  @IsString()
+  @IsNotEmpty()
+  start: string;
+
+  @IsString()
+  @IsNotEmpty()
+  end: string;
+}
 
 export class CreateDoctorDto {
   @IsString()
+  @IsNotEmpty()
   name: string;
 
   @IsString()
+  @IsNotEmpty()
   specialization: string;
 
   @IsString()
-  gender: string;
+  @IsNotEmpty()
+  work_start_time: string;
 
   @IsString()
-  location: string;
+  @IsNotEmpty()
+  work_end_time: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  slot_duration?: number;
 
   @IsOptional()
   @IsArray()
-  availability?: string[];
+  @ValidateNested({ each: true })
+  @Type(() => BreakDto)
+  breaks?: BreakDto[];
 }

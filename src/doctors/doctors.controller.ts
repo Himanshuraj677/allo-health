@@ -1,4 +1,15 @@
-import { Controller, Get, Post, Body, Param, Put, Delete, ParseIntPipe, Query, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Param,
+  Put,
+  Delete,
+  ParseIntPipe,
+  Query,
+  UseGuards
+} from '@nestjs/common';
 import { DoctorsService } from './doctors.service';
 import { CreateDoctorDto } from './dto/create-doctor.dto';
 import { UpdateDoctorDto } from './dto/update-doctor.dto';
@@ -13,8 +24,16 @@ export class DoctorsController {
   constructor(private readonly doctorsService: DoctorsService) {}
 
   @Get()
-  findAll(@Query('specialization') specialization?: string, @Query('location') location?: string) {
-    return this.doctorsService.findAll({ specialization, location });
+  findAll(
+    @Query('specialization') specialization?: string,
+    @Query('work_start_time') work_start_time?: string,
+    @Query('work_end_time') work_end_time?: string
+  ) {
+    return this.doctorsService.findAll({
+      specialization,
+      work_start_time,
+      work_end_time
+    });
   }
 
   @Get(':id')
